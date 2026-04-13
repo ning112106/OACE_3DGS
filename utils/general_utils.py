@@ -75,11 +75,14 @@ def strip_lowerdiag(L):
 def strip_symmetric(sym):
     return strip_lowerdiag(sym)
 
-def build_rotation(r):
+def build_rotation(r):                  # 根据四元数 构建旋转矩阵
+    # 输入的每个四元数，计算其范数
     norm = torch.sqrt(r[:,0]*r[:,0] + r[:,1]*r[:,1] + r[:,2]*r[:,2] + r[:,3]*r[:,3])
 
+    # 将输入的四元数归一化处理
     q = r / norm[:, None]
 
+    # 根据四元式求算旋转矩阵
     R = torch.zeros((q.size(0), 3, 3), device='cuda')
 
     r = q[:, 0]
@@ -106,10 +109,12 @@ def build_scaling_rotation(s, r):
     L[:,1,1] = s[:,1]
     L[:,2,2] = s[:,2]
 
+
     L = R @ L
     return L
 
 def safe_state(silent):
+
     old_f = sys.stdout
     class F:
         def __init__(self, silent):

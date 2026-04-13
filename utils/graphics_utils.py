@@ -36,11 +36,13 @@ def getWorld2View(R, t):
     return np.float32(Rt)
 
 def getWorld2View2(R, t, translate=np.array([.0, .0, .0]), scale=1.0):
+    # 计算视图变化矩阵
     Rt = np.zeros((4, 4))
     Rt[:3, :3] = R.transpose()
     Rt[:3, 3] = t
     Rt[3, 3] = 1.0
 
+    # 计算相枧中心并调整相机位置重新计算视图矩阵
     C2W = np.linalg.inv(Rt)
     cam_center = C2W[:3, 3]
     cam_center = (cam_center + translate) * scale
@@ -49,14 +51,17 @@ def getWorld2View2(R, t, translate=np.array([.0, .0, .0]), scale=1.0):
     return np.float32(Rt)
 
 def getProjectionMatrix(znear, zfar, fovX, fovY):
+    # 投影变换矩阵
     tanHalfFovY = math.tan((fovY / 2))
     tanHalfFovX = math.tan((fovX / 2))
 
+    # 1.计算视锥体的四个边界
     top = tanHalfFovY * znear
     bottom = -top
     right = tanHalfFovX * znear
     left = -right
 
+    # 2.构建投影矩阵
     P = torch.zeros(4, 4)
 
     z_sign = 1.0

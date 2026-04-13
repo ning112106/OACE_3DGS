@@ -43,6 +43,34 @@ def l1_loss(network_output, gt):
 def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
 
+# 改相邻高斯法线方向一致性损失
+############################################################################
+# def geometric_consistency_loss(gaussians, neighbor_indices):
+#     """
+#     计算相邻高斯法线方向一致性损失
+#     输入:
+#         gaussians: GaussianModel实例
+#         neighbor_indices: [N, k] 邻近高斯索引
+#     返回:
+#         loss: 标量张量
+#     """
+#     # 新增校验
+#     max_idx = gaussians.get_xyz.shape[0] - 1
+#     assert torch.all(neighbor_indices >= 0), "发现负索引"
+#     assert torch.all(neighbor_indices <= max_idx), f"索引超过最大值{max_idx}"
+#     # 获取所有高斯的法线 [N,3]
+#     normals = gaussians.normals
+#
+#     # 提取邻近法线 [N, k, 3]
+#     neighbor_normals = normals[neighbor_indices]  # [N,k,3]
+#
+#     # 计算余弦相似度 [N,k]
+#     cos_sim = torch.einsum('nd,nkd->nk', normals, neighbor_normals)
+#
+#     # 损失公式: 1 - 平均相似度
+#     loss = 1 - torch.mean(cos_sim)
+#     return loss
+
 def gaussian(window_size, sigma):
     gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
     return gauss / gauss.sum()

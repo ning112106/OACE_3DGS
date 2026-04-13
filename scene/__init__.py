@@ -40,13 +40,21 @@ class Scene:
         self.train_cameras = {}
         self.test_cameras = {}
 
+
         if os.path.exists(os.path.join(args.source_path, "sparse")):
-            scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.depths, args.eval, args.train_test_exp)
+            scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.masks, args.inpainteds, args.depths, args.eval, args.train_test_exp)  #改
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.depths, args.eval)
         else:
             assert False, "Could not recognize scene type!"
+
+
+        if os.path.exists(os.path.join(args.source_path, "overlap_dict.json")):
+            with open(os.path.join(args.source_path, "overlap_dict.json"), 'r') as f:
+                self.overlap_dict = json.load(f)
+        else:
+            print("Warning: overlap_dict.json not found, overlap information will not be used.")
 
         if not self.loaded_iter:
             with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply") , 'wb') as dest_file:
@@ -61,7 +69,6 @@ class Scene:
                 json_cams.append(camera_to_JSON(id, cam))
             with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:
                 json.dump(json_cams, file)
-
         if shuffle:
             random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
             random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
@@ -80,7 +87,13 @@ class Scene:
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"), args.train_test_exp)
         else:
+            # 根据点云创建初始化椭球
             self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
+
+        if 1.0 in self.train_cameras:
+            self.train_cameras_by_name = {cam.image_name: cam for cam in self.train_cameras[1.0] if hasattr(cam, "image_name")}
+        else:
+            self.train_cameras_by_name = {}
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
@@ -98,3 +111,6 @@ class Scene:
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
+
+    def getTrainCamerasFromName(self, image_name):
+        return self.train_cameras_by_name.get(image_name, None)

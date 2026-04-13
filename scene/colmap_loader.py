@@ -189,21 +189,27 @@ def read_extrinsics_binary(path_to_model_file):
         for _ in range(num_reg_images):
             binary_image_properties = read_next_bytes(
                 fid, num_bytes=64, format_char_sequence="idddddddi")
+            # 图像ID 四元式表示的旋转向量 平移向量 相机ID
             image_id = binary_image_properties[0]
             qvec = np.array(binary_image_properties[1:5])
             tvec = np.array(binary_image_properties[5:8])
             camera_id = binary_image_properties[8]
+            # 图像名称
             image_name = ""
             current_char = read_next_bytes(fid, 1, "c")[0]
             while current_char != b"\x00":   # look for the ASCII 0 entry
                 image_name += current_char.decode("utf-8")
                 current_char = read_next_bytes(fid, 1, "c")[0]
+            # 二维点的数量
             num_points2D = read_next_bytes(fid, num_bytes=8,
                                            format_char_sequence="Q")[0]
+            # 包含了二维点的坐标和对应的三维点的ID
             x_y_id_s = read_next_bytes(fid, num_bytes=24*num_points2D,
                                        format_char_sequence="ddq"*num_points2D)
+            # 二维点的坐标
             xys = np.column_stack([tuple(map(float, x_y_id_s[0::3])),
                                    tuple(map(float, x_y_id_s[1::3]))])
+            # 三维点的ID
             point3D_ids = np.array(tuple(map(int, x_y_id_s[2::3])))
             images[image_id] = Image(
                 id=image_id, qvec=qvec, tvec=tvec,
@@ -224,6 +230,7 @@ def read_intrinsics_binary(path_to_model_file):
         for _ in range(num_cameras):
             camera_properties = read_next_bytes(
                 fid, num_bytes=24, format_char_sequence="iiQQ")
+            # 相机ID 模型相机的名称 图像宽高 相机内参
             camera_id = camera_properties[0]
             model_id = camera_properties[1]
             model_name = CAMERA_MODEL_IDS[camera_properties[1]].model_name

@@ -19,13 +19,20 @@ class GroupParams:
 class ParamGroup:
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
         group = parser.add_argument_group(name)
+        # 遍历ParamGroup实例的所有对象
         for key, value in vars(self).items():
             shorthand = False
             if key.startswith("_"):
                 shorthand = True
                 key = key[1:]
             t = type(value)
-            value = value if not fill_none else None 
+            value = value if not fill_none else None
+
+            if key == "masks":          # 改
+                shorthand = False       # 改
+            if key == "inpainteds":     # 改
+                shorthand = False       # 改
+
             if shorthand:
                 if t == bool:
                     group.add_argument("--" + key, ("-" + key[0:1]), default=value, action="store_true")
@@ -38,6 +45,7 @@ class ParamGroup:
                     group.add_argument("--" + key, default=value, type=t)
 
     def extract(self, args):
+        # 遍历args所有属性
         group = GroupParams()
         for arg in vars(args).items():
             if arg[0] in vars(self) or ("_" + arg[0]) in vars(self):
@@ -46,7 +54,7 @@ class ParamGroup:
 
 class ModelParams(ParamGroup): 
     def __init__(self, parser, sentinel=False):
-        self.sh_degree = 3
+        self.sh_degree = 3              # 球谐函数维数
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
@@ -56,10 +64,12 @@ class ModelParams(ParamGroup):
         self.train_test_exp = False
         self.data_device = "cuda"
         self.eval = False
+        self._masks = "masks"            # 改 掩码文件夹
+        self._inpainteds = "inpainteds"  # 改 修复后的文件夹
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
-        g = super().extract(args)
+        g = super().extract(args)       # 调用父类的函数
         g.source_path = os.path.abspath(g.source_path)
         return g
 
@@ -72,15 +82,18 @@ class PipelineParams(ParamGroup):
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
-    def __init__(self, parser):
+    def __init__(self, parser):             #设置学习率
         self.iterations = 30_000
+        # self.iterations = 3000            # 改
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
         self.position_lr_delay_mult = 0.01
         self.position_lr_max_steps = 30_000
+        # self.position_lr_max_steps = 3000
         self.feature_lr = 0.0025
         self.opacity_lr = 0.025
-        self.scaling_lr = 0.005
+        # self.scaling_lr = 0.003
+        self.scaling_lr = 0.005        # 改
         self.rotation_lr = 0.001
         self.exposure_lr_init = 0.01
         self.exposure_lr_final = 0.001
@@ -88,10 +101,14 @@ class OptimizationParams(ParamGroup):
         self.exposure_lr_delay_mult = 0.0
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2
+        self.lambda_mvphotometric = 0.05        # 3改
         self.densification_interval = 100
-        self.opacity_reset_interval = 3000
+        self.opacity_reset_interval = 500
+        # self.opacity_reset_interval = 3000   # 对应70000
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
+        # self.densify_until_iter = 1500
+        # self.densify_grad_threshold = 0.0003
         self.densify_grad_threshold = 0.0002
         self.depth_l1_weight_init = 1.0
         self.depth_l1_weight_final = 0.01

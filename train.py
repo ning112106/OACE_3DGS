@@ -11,8 +11,10 @@
 
 import os
 import torch
+import random
 from random import randint
 from utils.loss_utils import l1_loss, ssim
+# from utils.loss_utils import l1_loss, ssim , geometric_consistency_loss   # 改
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -22,6 +24,10 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+from utils.projection_viewpoint import warp_image_to_view
+
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -31,6 +37,7 @@ except ImportError:
 try:
     from fused_ssim import fused_ssim
     FUSED_SSIM_AVAILABLE = True
+
 except:
     FUSED_SSIM_AVAILABLE = False
 
@@ -46,21 +53,29 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
 
     first_iter = 0
+
     tb_writer = prepare_output_and_logger(dataset)
+
+
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
+
     scene = Scene(dataset, gaussians)
+
     gaussians.training_setup(opt)
+
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
 
+
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
 
-    use_sparse_adam = opt.optimizer_type == "sparse_adam" and SPARSE_ADAM_AVAILABLE 
+    use_sparse_adam = opt.optimizer_type == "sparse_adam" and SPARSE_ADAM_AVAILABLE
     depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=opt.iterations)
 
     viewpoint_stack = scene.getTrainCameras().copy()
@@ -68,8 +83,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     ema_Ll1depth_for_log = 0.0
 
+
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -108,6 +125,43 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
+        gt_image = viewpoint_cam.original_image.cuda()
+        mask_image = viewpoint_cam.gt_mask_image.cuda()  # 改
+        inpainted_image = viewpoint_cam.gt_inpainted_image.cuda()  # 改
+
+        consistency_loss = 0.0
+        overlap_names = scene.overlap_dict.get(str(viewpoint_cam.image_name), [])
+        neighbor_names = [entry[0] for entry in overlap_names]
+
+
+        valid_refs = []
+        for name in neighbor_names:
+            ref_cam = scene.getTrainCamerasFromName(name)
+            if ref_cam is not None:
+                valid_refs.append(ref_cam)
+
+        sampled_refs = random.sample(valid_refs, min(len(valid_refs), 2))
+        consistency_loss = 0.0
+        for ref_cam in sampled_refs:
+            ref_render_pkg = render(ref_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp)
+            ref_image = ref_render_pkg["render"]
+            ref_depth = ref_render_pkg["depth"]
+
+            warped_ref_to_src = warp_image_to_view(
+                ref_image,
+                ref_cam,
+                viewpoint_cam,
+                gaussians,
+                pipe,
+                ref_depth
+            )
+
+            loss_pho = l1_loss(warped_ref_to_src * (1 - mask_image), gt_image * (1 - mask_image))
+            consistency_loss += loss_pho
+
+        consistency_loss = consistency_loss / max(1, len(valid_refs))
+
+
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
@@ -115,15 +169,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             alpha_mask = viewpoint_cam.alpha_mask.cuda()
             image *= alpha_mask
 
-        # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-        if FUSED_SSIM_AVAILABLE:
-            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
-        else:
-            ssim_value = ssim(image, gt_image)
+        loss_blend_orig = (1.0-mask_image) * torch.abs(image - gt_image)
+        loss_blend_inpaint = mask_image * torch.abs(image - inpainted_image)
+        Ll1 = (loss_blend_orig + loss_blend_inpaint).mean()
 
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
+        if FUSED_SSIM_AVAILABLE:
+            ssim_clear = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+            ssim_occlusion = fused_ssim(image.unsqueeze(0), inpainted_image.unsqueeze(0))
+        else:
+            ssim_clear = ssim(image, gt_image)
+            ssim_occlusion = ssim(image, inpainted_image)
+
+        mask_mean = mask_image.mean()
+        ssim_value = (1.0 - mask_mean) * ssim_clear + mask_mean * ssim_occlusion
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value) + opt.lambda_mvphotometric * consistency_loss# 2改
+
 
         # Depth regularization
         Ll1depth_pure = 0.0
@@ -144,7 +204,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         iter_end.record()
 
         with torch.no_grad():
-            # Progress bar
+            # Progress bartrain
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
 
@@ -169,6 +229,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -254,6 +315,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
+
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
@@ -261,6 +323,7 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
+
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")

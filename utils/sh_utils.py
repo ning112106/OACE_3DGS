@@ -67,6 +67,7 @@ def eval_sh(deg, sh, dirs):
     Returns:
         [..., C]
     """
+    # sh 对应的是球谐函数的系数，dirs 对应的是方向向量
     assert deg <= 4 and deg >= 0
     coeff = (deg + 1) ** 2
     assert sh.shape[-1] >= coeff
